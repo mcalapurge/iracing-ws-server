@@ -1,9 +1,17 @@
 var express = require('express')
-var app = express();
-var expressWs = require('express-ws')(app);
+const https = require('https')
 const fs = require('fs');
 const irsdk = require('node-irsdk');
 const helpers = require('./src/helpers.js');
+
+var options = {
+    key: fs.readFileSync('./security/server.key'),
+    cert: fs.readFileSync('./security/server.cert')
+};
+
+var app = express();
+var server = https.createServer(options, app);
+var expressWs = require('express-ws')(app, server);
 
 
 let iRacingConnected = false;
@@ -61,14 +69,14 @@ iracing.once('SessionReady', function () {
             }
         })
         playerPositions.sort((x, y) => x.Position - y.Position);
-
+        const Clutch = Math.abs(val.Clutch * 100 - 100); 
         const formattedData = {
             "Steering": (val.SteeringWheelAngle * 180 / Math.PI).toFixed(1),
-            "Throttle": `${(val.Throttle * 100).toFixed(0)}%`,
-            "Brake": `${(val.Brake * 100).toFixed(0)}%`,
-            "ClutchEngagement": `${(val.Clutch * 100).toFixed(0)}%`,
+            "Throttle": `${(val.Throttle * 100).toFixed(0)}`,
+            "Brake": `${(val.Brake * 100).toFixed(0)}`,
+            "ClutchEngagement": `${Clutch.toFixed(0)}`,
             "Gear": val.Gear.toFixed(0),
-            "ShiftIndicator": `${(val.ShiftIndicatorPct * 100).toFixed(0)}%`,
+            "ShiftIndicator": `${(val.ShiftIndicatorPct * 100).toFixed(0)}`,
             "RPMs": val.RPM.toFixed(0),
             "SpeedMPH": (val.Speed * 2.237).toFixed(0),
             "SpeedKPH": (val.Speed * 3.6).toFixed(0),
@@ -91,48 +99,39 @@ iracing.once('SessionReady', function () {
     });
 });
 
-app.get('/data', function (req, res) {
+app.ws('/data', function(ws, req) {
     if (iRacingConnected) {
-        res.send(JSON.stringify(expressData, null, 2));
-    } else {
-        res.send(JSON.stringify({"Msg": "iRacing Is not connected"}, null, 2));
-    }
-})
-
-app.ws('/telem', function(ws, req) {
-    if (iRacingConnected) {
+        let messageInterval;
+        ws.on("close", (ws)=> {
+            clearInterval(messageInterval)
+        })
+        ws.on("connectFailed", (ws)=> {
+            clearInterval(messageInterval)
+        })
+        ws.on("error", (ws)=> {
+            clearInterval(messageInterval)
+        })
 
         ws.on('message', function(msg) {
-            let messageInterval;
-            if (parseInt(msg)){
+            if (msg && (parseInt(msg) >= 50)){
                 messageInterval = setInterval(()=> {
                     ws.send(JSON.stringify(expressData, null, 2));
                 }, msg)
+            } else {
+                clearInterval(messageInterval);
+                ws.send(JSON.stringify({"Msg": "Polling reset"}, null, 2));
             }
         });
-    } else {
-        ws.on('connect'), function(){
-            ws.send(JSON.stringify({"Msg": "iRacing Is not connected"}, null, 2));
-        }
+    } 
+    else {
+        ws.on('connection', function connection(ws) {
+            ws.on('connect'), function(){
+                ws.send(JSON.stringify({"Msg": "iRacing Is not connected"}, null, 2));
+            }
+        });
     }
 });
 
-app.ws('/positions', function(ws, req) {
-    if (iRacingConnected) {
+app.use(express.static('src'))
 
-        ws.on('message', function(msg) {
-            if (parseInt(msg)){
-                let messageInterval;
-                messageInterval = setInterval(()=> {
-                    ws.send(JSON.stringify(playerPositions, null, 2));
-                }, msg)
-            }
-        });
-    } else {
-        ws.on('connect'), function(){
-            ws.send(JSON.stringify({"Msg": "iRacing Is not connected"}, null, 2));
-        }
-    }
-});
-
-app.listen(8080);
+server.listen(8080); // get creative
